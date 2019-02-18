@@ -1,0 +1,2100 @@
+; uspeech.rom, disassembly by Brian Handscomb 16/17 February 2019
+; code copyright 1983 Currah (according to message)
+
+; ROM was dumped to stream of <addr> <byte> DEFB $<byte> by code
+
+; all edits and opcode disassembly by hand using http://clrhome.org/table/
+
+; - - - - - - - - - -
+
+; system variables the code interacts with
+
+SV_KSTATE EQU $5C00
+SV_LAST_K EQU $5C08
+SV_ERR_NR EQU $5C3A
+SV_FLAGS  EQU $5C3B
+SV_ERR_SP EQU $5C3D
+SV_VARS   EQU $5C4B
+SV_FRAMES EQU $5C78
+SV_RAMTOP EQU $5CB2
+SV_P_RAMT EQU $5CB4
+
+; it also peeks at part of the K channel data
+
+SV_CHINFO EQU $5CB6
+
+; - - - - - - - - - -
+
+; character defs for copyright (more at end of ROM)
+
+0000 00          DEFB $00 ; ........
+0001 3C          DEFB $3C ; ..xxxx..
+0002 42          DEFB $42 ; .x....x.
+0003 0C          DEFB $0C ; ....xx..
+0004 02          DEFB $02 ; ......x.
+0005 42          DEFB $42 ; .x....x.
+0006 3C          DEFB $3C ; ..xxxx..
+0007 00          DEFB $00 ; ........
+
+0008 FF          DEFB $FF ; xxxxxxxx
+0009 83          DEFB $83 ; x.....xx
+000A BD          DEFB $BD ; x.xxxx.x
+000B BD          DEFB $BD ; x.xxxx.x
+000C 83          DEFB $83 ; x.....xx
+000D BB          DEFB $BB ; x.xxx.xx
+000E BD          DEFB $BD ; x.xxxx.x
+000F FF          DEFB $FF ; xxxxxxxx
+
+0010 FF          DEFB $FF ; xxxxxxxx
+0011 C3          DEFB $C3 ; xx....xx
+0012 BD          DEFB $BD ; x.xxxx.x
+0013 BD          DEFB $BD ; x.xxxx.x
+0014 81          DEFB $81 ; x......x
+0015 BD          DEFB $BD ; x.xxxx.x
+0016 BD          DEFB $BD ; x.xxxx.x
+0017 FF          DEFB $FF ; xxxxxxxx
+
+0018 FF          DEFB $FF ; xxxxxxxx
+0019 BD          DEFB $BD ; x.xxxx.x
+001A BD          DEFB $BD ; x.xxxx.x
+001B 81          DEFB $81 ; x......x
+001C BD          DEFB $BD ; x.xxxx.x
+001D BD          DEFB $BD ; x.xxxx.x
+001E BD          DEFB $BD ; x.xxxx.x
+001F FF          DEFB $FF ; xxxxxxxx
+
+0020 00          DEFB $00 ; ........
+0021 30          DEFB $30 ; ..xx....
+0022 50          DEFB $50 ; .x.x....
+0023 10          DEFB $10 ; ...x....
+0024 10          DEFB $10 ; ...x....
+0025 10          DEFB $10 ; ...x....
+0026 7C          DEFB $7C ; .xxxxx..
+0027 00          DEFB $00 ; ........
+
+0028 00          DEFB $00 ; ........
+0029 3C          DEFB $3C ; ..xxxx..
+002A 42          DEFB $42 ; .x....x.
+002B 42          DEFB $42 ; .x....x.
+002C 3E          DEFB $3E ; ..xxxxx.
+002D 02          DEFB $02 ; ......x.
+002E 3C          DEFB $3C ; ..xxxx..
+002F 00          DEFB $00 ; ........
+
+0030 00          DEFB $00 ; ........
+0031 3C          DEFB $3C ; ..xxxx..
+0032 42          DEFB $42 ; .x....x.
+0033 3C          DEFB $3C ; ..xxxx..
+0034 42          DEFB $42 ; .x....x.
+0035 42          DEFB $42 ; .x....x.
+0036 3C          DEFB $3C ; ..xxxx..
+0037 00          DEFB $00 ; ........
+
+; - - - - - - - - - -
+
+L0038: ; vblank entry point
+0038 F5          PUSH AF ; doesn't seem to be much point
+0039 F1          POP  AF
+003A F3          DI ; disable interrupts (we're in vblank)
+003B E5          PUSH HL ; save regs
+003C F5          PUSH AF
+003D C5          PUSH BC
+003E D5          PUSH DE
+
+; now test RAMTOP to see if we need to perform our setup
+
+003F 2A B2 5C    LD   HL,(SV_RAMTOP) ; check RAMTOP
+0042 7D          LD   A,L
+0043 FE 57       CP   $57 ; is it $xx57
+0045 20 09       JR   NZ,$09 ; ==$0050 ; no, jump for further test
+0047 7C          LD   A,H
+0048 FE FF       CP   $FF ; is it $FF57
+004A 28 35       JR   Z,$35 ; ==$0081 ; yes (48K default), need to setup
+004C FE 7F       CP   $7F ; is it $7F57
+004E 28 31       JR   Z,$31 ; ==$0081 ; yes (16K default), need to setup
+
+L0050: ; more tests
+0050 3E 06       LD   A,$06 ; set HL=buffer (next allophone)
+0052 CD 54 03    CALL $0354
+0055 44          LD   B,H ; store in BC
+0056 4D          LD   C,L
+0057 CD 75 03    CALL $0375 ; check RAMTOP
+005A 38 25       JR   C,$25 ; ==$0081 ; RAMTOP too high?, need to setup
+005C CD 7F 03    CALL $037F ; get buffer pointer (lower still)
+005F CD 75 03    CALL $0375 ; check RAMTOP
+0062 DC A2 03    CALL C,$03A2 ; buffer grew to below RAMTOP? reset
+0065 AF          XOR  A ; point HL to speech flags, fetch in A
+0066 CD 54 03    CALL $0354
+0069 CB 57       BIT  2,A ; keyboard scan flag
+006B 20          JR   NZ,$4A ; ==$00B7 ; jump forward if set
+006D CB D6       SET  2,(HL) ; was clear, set it
+006F D1          POP  DE ; restore regs
+0070 C1          POP  BC
+0071 F1          POP  AF
+0072 E1          POP  HL
+0073 E5          PUSH HL ; mess with stack... weird... maybe work out later...
+0074 E5          PUSH HL
+0075 E1          POP  HL
+0076 E1          POP  HL
+0077 21 38 00    LD   HL,$0038
+007A E5          PUSH HL
+007B 3B          DEC  SP
+007C 3B          DEC  SP
+007D E1          POP  HL
+007E C3 38 00    JP   $0038 ; back to vblank entry, causes ZX ROM to swap back
+
+; - - - - - - - - - -
+
+; this is our setup routine where we reserve space at top of RAM
+
+L0081: 
+0081 3A 78 5C    LD   A,(SV_FRAMES) ; FRAMES < 5
+0084 FE 05       CP   $05
+0086 DA A3 01    JP   C,$01A3 ; leave, wait for ZX ROM to setup
+0089 AF          XOR  A  ; point HL to where speech flags will be
+008A CD 54 03    CALL $0354
+008D 25          DEC  H ; save 256 bytes
+008E 22 B2 5C    LD   (SV_RAMTOP),HL ; set RAMTOP
+0091 24          INC  H ; back to speech flags
+0092 36 82       LD   (HL),$82 ; init ($80 copyright message flag)
+0094 2B          DEC  HL ; allegedly spare byte (but is apparently used)
+0095 AF          XOR  A
+0096 77          LD   (HL),A ; clear it
+0097 2B          DEC  HL
+0098 74          LD   (HL),H ; set buffer pointer high
+0099 2B          DEC  HL
+009A 36 51       LD   (HL),$51 ; set buffer pointer lo
+009C 2B          DEC  HL
+009D 77          LD   (HL),A ; clear spare byte
+009E 2B          DEC  HL
+009F 77          LD   (HL),A ; clear last spare byte
+00A0 2A B2 5C    LD   HL,(SV_RAMTOP) ; rebuild what ZX ROM expects
+00A3 36 3E       LD   (HL),$3E
+00A5 2B          DEC  HL
+00A6 77          LD   (HL),A
+00A7 F9          LD   SP,HL ; set machine code stack
+00A8 2B          DEC  HL
+00A9 77          LD   (HL),A
+00AA 2B          DEC  HL
+00AB 77          LD   (HL),A
+00AC 22 3D 5C    LD   (SV_ERR_SP),HL ; update system variable
+00AF 11 A9 12    LD   DE,$12A9 ; ZX ROM 'MAIN_1'
+00B2 D5          PUSH DE
+00B3 FB          EI
+00B4 C3 38 00    JP   $0038 ; back to vblank entry, causes ZX ROM to swap back
+
+; - - - - - - - - - -
+
+; continuation of vblank handler
+
+L00B7:
+00B7 CB 96       RES  2,(HL)
+00B9 CB 7E       BIT  7,(HL) ; check copyright flag
+00BB C4 AB 01    CALL NZ,$01AB ; print copyright if set
+
+; this is where the routine goes backwards to the ZX ROM vblank
+; (guess to prevent a double increment, is ROM vblank hit twice?)
+
+; first roll back FRAMES
+
+00BE 2A 78 5C    LD   HL,(SV_FRAMES) ; decrement three byte frames counter
+00C1 7C          LD   A,H ; lo 2 bytes
+00C2 B5          OR   L
+00C3 20 04       JR   NZ,$04 ; ==$00C9
+00C5 21 7A 5C    LD   HL,SV_FRAMES+2 ; lo bytes 0, decrement high byte
+00C8 35          DEC  (HL)
+
+L00C9:
+00C9 2A 78 5C    LD   HL,(SV_FRAMES) ; lo 2 bytes
+00CC 2B          DEC  HL ; decrement
+00CD 22 78 5C    LD   (SV_FRAMES),HL ; store
+
+; now roll back counters in KSTATE
+
+00D0 21 02 5C    LD   HL,SV_KSTATE+2 ; point to first key repeat delay counter
+00D3 11 04 00    LD   DE.$0004 ; kstate param block size
+00D6 CD 4B 03    CALL $034B; increment delay counter
+00D9 2B          DEC  HL ; point to call counter
+00DA CD 4B 03    CALL $034B ; increment that too
+
+; back to speech code, look for s$ and keys
+
+00DD 3E 53       LD   A,$53 ; 010 10011 (look for string s$)
+00DF CD CD 01    CALL $01CD ; var check
+00E2 CC 1F 02    CALL Z.$021F ; if found s$...
+00E5 CD AD 02    CALL $02AD ; look for and handle keys
+
+; handling keys variable sets zero flag for state
+; this is where we start handling keyboard speech
+
+00E8 CA 66 01    JP   Z,$0166 ; key voice flag test, jump if disabled
+00EB AF          XOR  A ; point HL to speech flags
+00EC CD 54 03    CALL $0354
+00EF 3A 3B 5C    LD   A,(SV_FLAGS) ; new key pressed?
+00F2 CB 6F       BIT  5,A
+00F4 28 06       JR   Z,$06 ; ==$00FC no, jump
+00F6 CB 66       BIT  4,(HL) ; key scan speech flag
+00F8 20 6C       JR   NZ,$6C ; ==$0166 non zero, skip forward
+00FA 18 04       JR   $04 ; ==$0100
+
+L00FC: ; no new key
+00FC CB A6       RES  4,(HL)
+00FE 18 66       JR   $66 ; ==$0166 skip forward
+
+; convert 'a' to 'z' uppercase
+
+L0100:
+0100 CB E6       SET  4,(HL)
+0102 3A 08 5C    LD   A,(SV_LAST_K)
+0105 FE 7B       CP   $7B ; '{'
+0107 30 08       JR   NC,$08 ; ==$0111
+0109 FE 61       CP   $61 ; 'a'
+010B 38 04       JR   C,$04 ; ==$0111
+010D D6 20       SUB  $20 ; 'a' to 'z' inclusive, make uppercase
+010F 18 1B       JR   $1B ; ==$012C
+
+; make all graphic characters $80 (so all say same thing)
+
+L0111: ; not lcase
+0111 FE A5       CP   $A5 ; 'RND'
+0113 30 08       JR   NC,$08 ; ==$011D
+0115 FE 80       CP   $80
+0117 38 04       JR   C,$04 ; ==$011D
+0119 3E 80       LD   A.$80 ; graphic chars, treat as $80
+011B 18 0F       JR   $0F ; ==$012C
+
+; remap some codes to save more, e.g. CLS remapped to CLEAR, etc
+
+L011D: ; not graphic, search for a range of symbols and remap
+011D 21 2D 04    LD   HL,$042D ; table
+0120 01 0D 00    LD   BC,$000D ; length
+0123 ED B1       CPIR
+0125 20 05       JR   NZ,$05 ; ==$012C ; not found? jump forward
+0127 01 0C 00    LD   BC.$000C ; point to corresponding entry in remap table
+012A 09          ADD  HL,BC
+012B 7E          LD   A,(HL) ; get remapped code
+
+; now find allophone listing for keycode from table at 0447 to 075A
+; table format as follows
+; $80 - fake end of allophone list for looping purposes (find end of previous word)
+; one byte for key code
+; one or more allophone bytes, last bit has high bit set
+; repeat key code and allophones
+; key code of $00 to terminate list
+
+L012C:
+012C 21 47 04    LD   HL,$0447 ; key code translation table
+012F 47          LD   B,A ; save key code in B
+
+; search loop, find end of previous list of allophones
+
+L0130:
+0130 CB 7E       BIT  7,(HL) ; hi bit set in table entry?
+0132 20 03       JR   NZ,$03 ; ==$0137 ; jump forward if set
+0134 23          INC  HL ; if not set, loop
+0135 18 F9       JR   $F9 ; ==$0130
+
+; test for end of list
+
+L0137:
+0137 23          INC  HL ; hi bit set, move forward
+0138 AF          XOR  A ; check for zero
+0139 BE          CP   (HL)
+013A 28 2A       JR   Z,$2A ; ==$0166 if zero skip out
+
+; check if we found the code we want
+
+013C 78          LD   A,B ; restore key code
+013D BE          CP   (HL) ; match
+013E 28 03       JR   Z,$03 ; ==$0143 ; if match, found
+0140 23          INC  HL ; no match, loop
+0141 18 ED       JR   $ED ; ==$0130
+
+; found keycode, now buffer the allophones, after first...
+
+L0143: ; match keycode
+0143 23          INC  HL ; point to allophones for key code (e.g. 47 15 0C 8D)
+0144 CD 93 03    CALL $0393
+0147 28 08       JR   Z,$08 ; ==$0151
+0149 03          INC  BC
+014A 0A          LD   A,(BC)
+014B 17          RLA
+014C 30 18       JR   NC,$18 ; ==$0166
+014E CD A2 03    CALL $03A2 ; reset buffer pointer
+
+; loop to buffer allophones
+
+L0151:
+0151 7E          LD   A,(HL) ; get allophone
+0152 02          LD   (BC),A ; store in buffer
+0153 0B          DEC  BC ; next pos
+0154 CD 75 03    CALL $0375
+0157 38 07       JR   C,$07 ; ==$0160
+0159 CB 7E       BIT  7,(HL) ; last allophone?
+015B 20 06       JR   NZ,$06 ; ==$0163 yes, jump
+015D 23          INC  HL ; no, get next
+015E 18 F1       JR   $F1 ; ==$0151
+
+L0160:
+0160 CD 7F 03    CALL $037F ; fetch buffer pointer
+
+L0163:
+0163 CD 8A 03    CALL $038A ; set buffer pointer to BC
+
+; done with key scan stuff, now let's see if speech chip is busy speaking
+
+L0166:
+0166 3A 00 10    LD   A,($1000) ; check speech chip busy flag
+0169 CB 47       BIT  0,A
+016B 20 36       JR   NZ,$36 ; ==$01A3 ; jump out if busy
+
+; not investigated...
+
+016D 3A 3A 5C    LD   A,(SV_ERR_NR)
+0170 17          RLA
+0171 D4 A2 03    CALL NC,$03A2 ; reset buffer pointer
+0174 CD 93 03    CALL $0393
+0177 20 06       JR   NZ,$06 ; ==$017F
+0179 AF          XOR  A ; zero to speech chip (pa1 allophone, silent)
+017A 32 00 10    LD   ($1000),A
+017D 18 24       JR   $24 ; ==$01A3 ; jump out
+
+; speech chip not busy and we want to set next allophone
+
+L017F:
+017F 3E 06       LD   A,$06 ; point to speech buffer and fetch next allophone
+0181 CD 54 03    CALL $0354
+
+; select intonation register
+
+0184 11 00 30    LD   DE,$3000
+0187 CB 77       BIT  6,A ; intonation up if set
+0189 28 01       JR   Z,$01 ; ==$018C
+018B 13          INC  DE
+
+; send allophone to speech chip registers
+
+L018C:
+018C 12          LD   (DE),A ; write allophone to appropriate intonation register
+018D 32 00 10    LD   ($1000),A ; write allophone to main speech chip register
+
+; now to move the buffer up
+
+0190 B7          OR   A
+0191 ED 42       SBC  HL,BC
+0193 03          INC  BC
+0194 E5          PUSH HL
+0195 CD 8A 03    CALL $038A
+0198 3E 06       LD   A,$06 ; point HL to speech buffer
+019A CD 54 03    CALL $0354
+019D 54          LD   D,H ; store in DE
+019E 5D          LD   E,L
+019F 2B          DEC  HL ; point HL to next but one
+01A0 C1          POP  BC
+01A1 ED B8       LDDR ; shuffle speech buffer along
+
+; and thats it for the vblank code, bye...
+
+L01A3:
+01A3 D1          POP  DE ; restore regs
+01A4 C1          POP  BC
+01A5 F1          POP  AF
+01A6 E1          POP  HL
+01A7 FB          EI ; re-enable interrupt
+01A8 C3 38 00    JP   $0038 ; back to vblank entry, causes ZX ROM to swap back
+
+; - - - - - - - - - -
+
+; this subroutine print the Currah copyright message at the top of the screen
+; can't use ZX ROM as we're swapped in its place
+
+; SUB
+L01AB: ; print copyright
+01AB 11 00 40    LD   DE,$4000 ; start of screen memory
+01AE 01 5B 07    LD   BC,$075B ; list of word pointers
+01B1 CB BE       RES  7,(HL) ; clear copyright flag
+
+; character loop
+
+L01B3:
+01B3 0A          LD   A,(BC) ; get pointer into HL
+01B4 6F          LD   L,A
+01B5 03          INC  BC
+01B6 0A          LD   A,(BC)
+01B7 FE FF       CP   $FF     ; check for $FFxx
+01B9 C8          RET  Z
+01BA 67          LD   H,A ; HL now a pointer from 075B table (first is 07A0)
+01BB C5          PUSH BC ; save position in list
+01BC 06 08       LD   B,$08 ; 8 rows
+
+; display loop
+
+L01BE:
+01BE 7E          LD   A,(HL) ; copy row of character
+01BF 12          LD   (DE),A
+01C0 23          INC  HL
+01C1 14          INC  D ; to go down one pixel row is 256 bytes
+01C2 10 FA       DJNZ $FA ; ==$01BE
+
+; move along
+
+01C4 7A          LD   A,D ; back to top of screen character
+01C5 D6 08       SUB  $08
+01C7 57          LD   D,A
+01C8 13          INC  DE ; move right
+01C9 C1          POP  BC ; restore position
+01CA 03          INC  BC ; increment and loop until done
+01CB 18 E6       JR   $E6 ; ==$01B3
+
+; - - - - - - - - - -
+
+; this subroutine searches for a variable given first/only letter and type
+; e.g. called with A = $53 to search for s$
+
+; SUB
+L01CD: ;var check
+01CD 47          LD   B,A ; save A in B
+
+; first check if we're executing BASIC or not
+
+01CE 3A 3B 5C    LD   A,(FLAGS)
+01D1 17          RLA
+01D2 30 35       JR   NC,$35 ; ==$0209 leave
+
+; K channel checking?
+
+01D4 3A B6 5C    LD   A,($5CB6) ; BY DEFAULT F4 09 (PRINT_OUT FOR K CHAN)
+01D7 FE F4       CP   $F4
+01D9 28 03       JR   Z,$03 ; ==$01DE
+01DB B7          OR   A
+01DC 20 2B       JR   NZ,$2B ; ==$0209 leave
+
+; start of actual check
+
+L01DE:
+01DE 2A 4B 5C    LD   HL,(SV_VARS)
+
+; var check loop
+
+L01E1:
+01E1 7E          LD   A,(HL) ; get type and (first) letter of variable
+01E2 B8          CP   B ; match?
+01E3 C8          RET  Z ; return to caller if found
+
+; this variable is not what we want, need to skip
+
+01E4 FE 80       CP   $80 ; end of variables?
+01E6 28 21       JR   Z,$21 ; ==$0209 leave
+01E8 E6 E0       AND  $E0 ; mask var type
+01EA FE 60       CP   $60 ; number name len = 1?
+01EC 28 23       JR   Z,$23 ; ==$0211
+01EE FE A0       CP   $A0 ; number name len > 1
+01F0 28 25       JR   Z,$25 ; ==$0217
+01F2 FE E0       CP   $E0 ; for-next var
+01F4 28 17       JR   Z,$17 ; ==$020D
+01F6 FE C0       CP   $C0 ; array of chars
+01F8 28 07       JR   Z,$07 ; ==$0201
+01FA FE 80       CP   $80 ; array of numbers
+01FC 28 03       JR   Z,$03 ; ==$0201
+01FE FE 40       CP   $40 ; string
+0200 C0          RET  NZ ; we don't know how to skip (undocumented/corrupted variable)
+
+L0201: ; skip array chars/numbers
+0201 23          INC  HL
+0202 5E          LD   E,(HL)
+0203 23          INC  HL
+0204 56          LD   D,(HL)
+0205 23          INC  HL
+0206 19          ADD  HL,DE
+0207 18 D8       JR   $D8 ; ==$01E1
+
+L0209: ; end var check, ensure non zero and flag set
+0209 3E 80       LD   A,$80
+020B A7          AND  A
+020C C9          RET
+
+L020D: ; skip for for-next
+020D 11 0D 00    LD   DE,$000D
+0210 19          ADD  HL,DE
+
+L0211: ; skip (?)
+0211 11 06 00    LD   DE,$0006
+0214 19          ADD  HL,DE
+0215 18 CA       JR   $CA ; ==$01E1
+
+L0217: ; num name len > 1
+0217 23          INC  HL
+0218 7E          LD   A,(HL)
+0219 CB 27       SLA  A
+021B 30 FA       JR   NC,$FA ; ==$0217
+021D 18 F2       JR   $F2 ; ==$0211
+
+; - - - - - - - - - -
+
+; this subroutine handles the s$ variable
+; not completely commented
+
+; SUB
+L021F: ; s$ handler
+021F 23          INC  HL ; move past name
+
+; get length into DE
+
+0220 5E          LD   E,(HL) ; length lo
+0221 AF          XOR  A
+0222 BE          CP   (HL)
+0223 23          INC  HL
+0224 56          LD   D,(HL) ; length hi
+0225 20 02       JR   NZ,$02 ; ==$0229
+0227 BE          CP   (HL)
+0228 C8          RET  Z ; empty string? leave
+
+; check if we've already handled the string
+
+L0229: ; s$ not empty
+0229 23          INC  HL ; point to start of string
+022A 3E 2A       LD   A,$2A ; does s$ begin '*'
+022C BE          CP   (HL)
+022D C8          RET  Z
+022E 3E 3F       LD   A,$3F ; does string begin '?'
+0230 BE          CP   (HL)
+0231 C8          RET  Z
+
+; new string needs handling
+
+0232 2B          DEC  HL ; stringstart-1
+0233 E5          PUSH HL
+0234 19          ADD  HL,DE ; add length
+0235 EB          EX   DE,HL ; end now in DE
+0236 E1          POP  HL ; restore stringstart-1
+
+; get buffer pointer so we can add allophones
+
+0237 CD 7F 03    CALL $037F ; fetch buffer pointer
+
+; string parsing loop
+
+L023A:
+023A C5          PUSH BC
+023B 23          INC  HL ; grab next char
+023C 7E          LD   A,(HL)
+023D CD 5E 03    CALL $035E ; mod letter
+
+; special parsing for '.'
+
+0240 FE 0E       CP   $0E ; '.'
+0242 20 0C       JR   NZ,$0C ; ==$0250
+0244 3E 04       LD   A,$04 ; buffer a long pause allophone
+0246 C1          POP  BC
+0247 02          LD   (BC),A
+0248 0B          DEC  BC
+0249 CD 75 03    CALL $0375
+024C D8          RET  C
+024D C5          PUSH BC
+024E 18 30       JR   $30 ; ==$0280
+
+; check if we have a multi letter code and handle it
+
+L0250: ; not '.'
+0250 FE 08       CP   $08 ; '(' complex
+0252 20 08       JR   NZ,$08 ; ==$025C
+0254 CD EB 02    CALL $02EB ; handle until ')'
+0257 30 27       JR   NC,$27 ; ==$0280 jump if okay
+0259 C1          POP  BC ; abort if not
+025A 18 0D       JR   $0D ; ==$0269
+
+L025C ; not '(' assume simple letter or ',' '\'' ' '
+025C E5          PUSH HL
+025D 21 AF 03    LD   HL,$03AF
+0260 01 1B 00    LD   BC,$001B
+0263 ED B1       CPIR
+0265 28 13       JR   Z,$13 ; ==$027A ; found it? jump
+
+; found something we don't understand so we abort...
+
+0267 E1          POP  HL
+0268 C1          POP  BC
+
+L0269: ; we come with if found (something) we don't like
+0269 13          INC  DE
+026A 23          INC  HL
+
+; return to start of string
+
+L026B:
+026B E5          PUSH HL
+026C B7          OR   A
+026D ED 52       SBC  HL,DE
+026F E1          POP  HL
+0270 38 03       JR   C,$03 ; ==$0275
+0272 2B          DEC  HL
+0273 18 F6       JR   $F6 ; ==$026B
+
+; flag error by changing first character
+
+L0275:
+0275 0E 3F       LD   C,$3F ; '?'
+0277 71          LD   (HL),C
+0278 18 29       JR   $29 ; ==$02A3 leave
+
+L027A: ; found simple allophone
+027A 01 35 00    LD   BC,$0035
+027D 09          ADD  HL,BC
+027E 7E          LD   A,(HL) ; get allophone code
+027F E1          POP  HL
+
+L0280:
+0280 47          LD   B,A
+0281 AF          XOR  A ; get speech flags in A
+0282 E5          PUSH HL ; save HL from corruption
+0283 CD 54 03    CALL $0354
+0286 E1          POP  HL
+0287 E6 40       AND  $40 ; intonation flag
+0289 80          ADD  A,B
+028A C1          POP  BC
+028B 02          LD   (BC),A ; buffer allophone
+028C 0B          DEC  BC
+028D CD 75 03    CALL $0375
+0290 D8          RET  C
+0291 E5          PUSH HL
+0292 ED 52       SBC  HL,DE
+0294 E1          POP  HL
+0295 38          JR   C,$A3 ; ==$023A
+0297 AF          XOR  A
+0298 02          LD   (BC),A
+0299 0B          DEC  BC
+029A CD 75 03    CALL $0375
+029D D8          RET  C
+029E CD 8A 03    CALL $038A
+02A1 0E 2A       LD   C,$2A ; '*' to sinal success
+
+L02A3: ; update start of s$ with char in c reg (flag)
+02A3 3E 53       LD   A,$53 ; 010 10011 (string s$)
+02A5 CD CD 01    CALL $01CD ; var check
+02A8 23          INC  HL
+02A9 23          INC  HL
+02AA 23          INC  HL
+02AB 71          LD   (HL),C
+02AC C9          RET
+
+; - - - - - - - - - -
+
+; this subroutine looks for keys variable and handles it if found
+; it looks like this routine can be fooled... ???
+
+; SUB
+L02AD: ; look for keys var
+02AD 3E AB       LD   A,$AB ; 101 01011 (num name len > 0, starting k)
+02AF CD CD 01    CALL $01CD ; var check
+02B2 20 29       JR   NZ,$29 ; ==$02DD nothing starting k? leave
+
+; check if remainder of name matches
+
+02B4 23          INC  HL
+02B5 3E 65       LD   A,$65 ; 'e'
+02B7 ED A1       CPI
+02B9 20 22       JR   NZ,$22 ; ==$02DD
+02BB 3E 79       LD   A,$79 ; 'y'
+02BD ED A1       CPI
+02BF 20 1C       JR   NZ,$1C ; ==$02DD
+02C1 3E F3       LD   A,$F3 ; 's'+80h
+02C3 ED A1       CPI
+02C5 20 16       JR   NZ,$16 ; ==$02DD
+
+; check value, first two byte zero for small positive integers
+
+02C7 AF          XOR  A ; first byte 0?
+02C8 ED A1       CPI
+02CA 20 11       JR   NZ,$11 ; ==$02DD
+02CC ED A1       CPI ; second byte 0?
+02CE 20 0D       JR   NZ,$0D ; ==$02DD
+
+; third byte
+
+02D0 BE          CP   (HL) ; positive int, check third byte
+02D1 28 11       JR   Z,$11 ; ==$02E4 ; zero jump
+02D3 3C          INC  A ; (A=1) ; check for 1
+02D4 BE          CP   (HL)
+02D5 20 06       JR   NZ,$06 ; ==$02DD neither 0 or 1
+02D7 3D          DEC  A ; (A=0) point HL to speech flags
+02D8 CD 54 03    CALL $0354
+02DB CB CE       SET  1,(HL) ; enable key voice
+
+L02DD: keys isn't 1 or 0, just check key voice flag
+02DD AF          XOR  A ; point HL to speech flags
+02DE CD 54 03    CALL $0354
+02E1 CB 4E       BIT  1,(HL) ; test key voice flag
+02E3 C9          RET
+
+L02E4: ; keys==0, disable key voice
+02E4 CD 54 03    CALL $0354 ; (A=0) point HL to speech flags
+02E7 CB 8E       RES  1,(HL) ; disable key voice
+02E9 18 F2       JR   $F2 ; ==$02DD
+
+; - - - - - - - - - -
+
+; called from s$ handler this processes codes in parentheses
+; it creates a single byte compound value
+
+; SUB
+L02EB: ; handle complex allophones
+02EB 06          LD   B,$00 ; init compound value
+
+; loop?
+
+L02ED:
+02ED 23          INC  HL
+02EE 7E          LD   A,(HL)
+02EF FE 29       CP   $29 ; ')' ends
+02F1 28 16       JR   Z,$16 ; ==$0309
+
+02F3 C5          PUSH BC
+02F4 CD 5E 03    CALL $035E ; mod letter
+02F7 E5          PUSH HL
+
+02F8 21 AF 03    LD   HL,$03AF ; only alphabetic characters
+02FB 01 18 00    LD   BC,$0018
+02FE ED B1       CPIR
+0300 E1          POP  HL
+0301 C1          POP  BC
+0302 20 45       JR   NZ,$45 ; ==$0349 ; not found letter
+
+; alphabetic chars, add up in B to make single value
+
+0304 80          ADD  A,B
+0305 D8          RET  C ; abort if overflow
+0306 47          LD   B,A
+0307 18 E4       JE   $E4 ; ==$02ED go round again
+
+; B now has compound value, however some values conflict
+; ck/gg=$4E nn/th=$5C rr/ou=$64 oy/tt=$68 aer/ear=78
+; looks like may be a bug with ck/gg
+; also strangely ow processed as if conflicting
+
+L0309:
+0309 78          LD   A,B
+030A FE 64       CP   $64 ; (rr) or (ou)
+030C 28 27       JR   Z,$27 ; ==$0335
+030E FE 68       CP   $68 ; (oy) or (tt)
+0310 28 23       JR   Z,$23 ; ==$0335
+0312 FE 5C       CP   $5C ; (nn) or (th)
+0314 28 1F       JR   Z,$1F ; ==$0335
+0316 FE 66       CP   $66 ; (ow) - huh?
+0318 28 1B       JR   Z,$1B ; ==$0335
+031A FE 78       CP   $78 ; (aer) or (ear)
+031C 28 13       JR   Z,$13 ; ==$0331
+
+031E 01 36 00    LD   BC,$0036 ; search full table
+0321 E5          PUSH HL
+0322 21 AF 03    LD   HL,$03AF
+0325 ED B1       CPIR
+0327 01 35 00    LD   BC.$0035
+
+L032A:
+032A 20 1C       JR   NZ,$1C ; ==$0348 not found? leave
+032C 09          ADD  HL,BC ; locate allophone and leave
+032D 7E          LD   A,(HL)
+032E B7          OR   A
+032F E1          POP  HL
+0330 C9          RET
+
+; conflict resolution, go back one/two chars to identify
+
+L0331: ; aer/ear
+0331 E5          PUSH HL
+0332 2B          DEC  HL
+0333 18          JR   $01 ; ==$0336
+
+L0335:
+0335 E5          PUSH HL
+
+L0336:
+0336 2B          DEC  HL
+0337 7E          LD   A,(HL)
+0338 CD 5E 03    CALL $035E ; mod letter
+033B 01 09 00    LD   BC,$0009 ; search conflict table
+033E 21 1B 04    LD   HL,$041B
+0341 ED B1       CPIR
+0343 01 08 00    LD   BC,$0008
+0346 18 E2       JR   $E2 ; ==$032A
+
+L0348:
+0348 E1          POP  HL
+
+L0349:
+0349 37          SCF
+034A C9          RET
+
+; - - - - - - - - - -
+
+; this subroutine is called twice to "unwind" both sets of key repeat counters
+
+; SUB
+L034B: ; increment kstate counters
+034B E5          PUSH HL
+034C 06 02       LD   B,2
+
+L034E:
+034E 34          INC  (HL)
+034F 19          ADD  HL,DE
+0350 10 FC       DJNZ $FC ; ==$034E
+0352 E1          POP HL
+0353 C9          RET
+
+; - - - - - - - - - -
+
+; multipurpose utility routine
+
+; SUB
+L0354: ; bufferutil called with A=06/00/03 (buffer/flag/buffptrlo)
+0354 2A B4 5C    LD   HL,(SV_P_RAMT) ; physical top of memory (e.g. FFFF)
+0357 6F          LD   L,A
+0358 3E 57       LD   A,$57
+035A 95          SUB  L ; A=$57-A
+035B 6F          LD   L,A ; e.g. FF51/FF57/FF54
+035C 7E          LD   A,(HL) ; value
+035D C9          RET
+
+; - - - - - - - - - -
+
+; modify ASCII character to make a code
+; (-$20 to skip control chars and change lower case to upper)
+; (flag 6, documented spare, used to identify case)
+
+; SUB
+L035E: do something then modify s$ character (sub 20h, 40h if gt 'a')
+035E E5          PUSH HL
+035F 47          LD   B,A
+0360 AF          XOR  A ; point HL to speech flags
+0361 CD 54 03    CALL $0354
+0364 78          LD   A,B
+0365 FE 61       CP   $61 ; 'a'
+0367 38          JR   C,$06 ; ==$036F
+0369 D6 40       SUB  $40 ; e.g. 'a'=21h
+036B CB B6       RES  6,(HL) ; clear speech flag 6, manual says spare
+036D 18 04       JR   $04 ; ==$0373
+
+L036F: ; uppercase
+036F D6 20       SUB  $20 ; e.g. 'A'=21h
+0371 CB F6       SET  6,(HL) ; set speech flag 6, manual says spare
+
+L0373:
+0373 E1          POP  HL
+0374 C9          RET
+
+; - - - - - - - - - -
+
+; this subroutine tests RAMTOP, e.g testing if need setup or buffer overflow
+
+; SUB
+L0375: ; test RAMTOP against BC
+0375 E5          PUSH HL
+0376 2A B2 5C    LD   HL,(SV_RAMTOP)
+0379 B7          OR   A
+037A ED 42       SBC  HL,BC ; carry if BC higher
+037C 3F          CCF ; carry if BC less or equal to RAMTOP
+037D E1          POP  HL
+037E C9          RET
+
+; - - - - - - - - - -
+
+; fetch buffer pointer - where allophones are added to the queue
+
+L037F: ; fetch buffer pointer
+037F E5          PUSH HL
+0380 3E 03       LD   A,$03 ; fetch buffer pointer
+0382 CD 54 03    CALL $0354
+0385 4F          LD   C,A ; lo byte
+0386 23          INC  HL
+0387 46          LD   B,(HL) ; hi byte
+0388 E1          POP  HL
+0389 C9          RET
+
+; - - - - - - - - - -
+
+; this subroutines updates the buffer pointer
+
+; SUB
+L038A: ; set buffer pointer to BC
+038A 3E 03       LD   A,$03 ; point HL to buffer pointer
+038C CD 54 03    CALL $0354
+038F 71          LD   (HL),C ; update lo byte
+0390 23          INC  HL
+0391 70          LD   (HL),B ; update hi byte
+0392 C9          RET
+
+; - - - - - - - - - -
+
+; not entirely sure...
+
+; SUB
+L0393:
+0393 E5          PUSH HL
+0394 3E 06       LD   A,$06 ; point HL to speech buffer (next allophone)
+0396 CD 54 03    CALL $0354
+0399 CD 7F 03    CALL $037F ; fetch buffer pointer
+039C ED 42       SBC  HL,BC
+039D 42          LD   B,D
+039E E1          POP  HL
+039F 37          SCF
+03A0 3F          CCF
+03A1 C9          RET
+
+; - - - - - - - - - -
+
+; used if buffer overflows, just go back to start
+
+; SUB
+L03A2: ; reset buffer pointer
+03A2 3E 06       LD   A,$06 ; point HL to speech buffer (next allophone)
+03A4 E5          PUSH HL
+03A5 CD 54 03    CALL $0354
+03A8 44          LD   B,H ; store in BC
+03A9 4D          LD   C,L
+03AA CD 8A 03    CALL $038A ; set buffer pointer to this (clear buffer)
+03AD E1          POP  HL
+03AE C9          RET
+
+; - - - - - - - - - -
+
+; main allophone translation table
+; first part also used to verify supported letter in compound tokens
+
+; allophone translate 1 (a-z / 3 pauses / compounds)
+D03AF: ; see L025C (bc=1b), L02ED (bc=18), L0309 (bc=35)
+03AF 21          DEFB $21 ; modified 'a'/'A'
+03B0 22          DEFB $22 ; b/B
+03B1 23          DEFB $23 ; c/C
+03B2 24          DEFB $24
+03B3 25          DEFB $25
+03B4 26          DEFB $26
+03B5 27          DEFB $27
+03B6 28          DEFB $28
+03B7 29          DEFB $29
+03B8 2A          DEFB $2A
+03B9 2B          DEFB $2B
+03BA 2C          DEFB $2C
+03BB 2D          DEFB $2D
+03BC 2E          DEFB $2E
+03BD 2F          DEFB $2F
+03BE 30          DEFB $30 ; p/P then skip q/Q
+03BF 32          DEFB $32 ; r/R
+03C0 33          DEFB $33
+03C1 34          DEFB $34
+03C2 35          DEFB $35
+03C3 36          DEFB $36
+03C4 37          DEFB $37 ; w/W then skip x/X
+03C5 39          DEFB $39 ; y/Y
+03C6 3A          DEFB $3A ; z/Z
+; pauses
+03C7 0C          DEFB $0C ; ','
+03C8 07          DEFB $07 ; '\''
+03C9 00          DEFB $00 ; ' '
+; compounds
+03CA 42          DEFB $42 ; aa
+03CB 5A          DEFB $5A ; ay
+03CC 44          DEFB $44 ; bb
+03CD 4E          DEFB $4E ; ck/gg duplicate - bug?
+03CE 48          DEFB $48 ; dd
+03CF 4A          DEFB $4A ; ee
+03D0 4E          DEFB $4E ; ck/gg duplicate - bug?
+03D1 50          DEFB $50 ; hh
+03D2 52          DEFB $52 ; ii
+03D3 58          DEFB $58 ; ll
+03D4 5E          DEFB $5E ; oo
+03D5 72          DEFB $72 ; yy
+03D6 61          DEFB $61 ; or
+03D7 53          DEFB $53 ; ar
+03D8 55          DEFB $55 ; ng
+03D9 4D          DEFB $4D ; eh
+03DA 57          DEFB $57 ; er
+03DB 5F          DEFB $5F ; wh
+03DC 4B          DEFB $4B ; ch
+03DD 5B          DEFB $5B ; sh
+03DE 5D          DEFB $5D ; uh
+03DF 62          DEFB $62 ; zh
+03E0 7B          DEFB $7B ; eau
+03E1 75          DEFB $75 ; ggg
+03E2 89          DEFB $89 ; err
+03E3 99          DEFB $99 ; ouu
+03E4 80          DEFB $80 ; dth
+
+; translations for simple allophones 'a' to 'z' (not 'q' or 'x')
+03E5 18          DEFB $18
+03E6 1C          DEFB $1C
+03E7 08          DEFB $08
+03E8 15          DEFB $15
+03E9 07          DEFB $07
+03EA 28          DEFB $28
+03EB 24          DEFB $24
+03EC 1B          DEFB $1B
+03ED 0C          DEFB $0C
+03EE 0A          DEFB $0A
+03EF 2A          DEFB $2A
+03F0 2D          DEFB $2D
+03F1 10          DEFB $10
+03F2 0B          DEFB $0B
+03F3 17          DEFB $17
+03F4 09          DEFB $09
+03F5 27          DEFB $27
+03F6 37          DEFB $37
+03F7 11          DEFB $11
+03F8 0F          DEFB $0F
+03F9 23          DEFB $23
+03FA 2E          DEFB $2E
+03FB 31          DEFB $31
+03FC 2B          DEFB $2B
+; pauses
+03FD 04          DEFB $04
+03FE 01          DEFB $01
+03FF 03          DEFB $03
+; compounds
+0400 14          DEFB $14
+0401 14          DEFB $14
+0402 3F          DEFB $3F
+0403 29          DEFB $29 ; ck
+0404 21          DEFB $21
+0405 13          DEFB $13
+0406 3D          DEFB $3D ; gg
+0407 39          DEFB $39
+0408 06          DEFB $06
+0409 3E          DEFB $3E
+040A 35          DEFB $35
+040B 19          DEFB $19
+040C 3A          DEFB $3A
+040D 3B          DEFB $3B
+040E 2C          DEFB $2C
+040F 1A          DEFB $1A
+0410 33          DEFB $33
+0411 30          DEFB $30
+0412 32          DEFB $32
+0413 25          DEFB $25
+0414 1E          DEFB $1E
+0415 26          DEFB $26
+0416 35          DEFB $35
+0417 22          DEFB $22
+0418 34          DEFB $34
+0419 1F          DEFB $1F
+041A 12          DEFB $12
+
+; - - - - - - - - - -
+
+; where (rr) and (ou) both create single value this table used to resolve conflict
+
+; conflict resolution table (e.g. rr and ou both create compound code $64)
+D041B:
+041B 32          DEFB $32 ; r from rr
+041C 35          DEFB $35 ; u from ou
+041D 34          DEFB $34 ; t from tt
+041E 39          DEFB $39 ; y from oy
+041F 28          DEFB $28 ; h from th
+0420 2E          DEFB $2E ; n fron nn
+0421 21          DEFB $21 ; a from ear
+0422 25          DEFB $25 ; e from aer
+0423 37          DEFB $37 ; w from ow
+
+0424 0E          DEFB $0E
+0425 16          DEFB $16
+0426 0D          DEFB $0D
+0427 05          DEFB $05
+0428 1D          DEFB $1D
+0429 38          DEFB $38
+042A 3C          DEFB $3C
+042B 2F          DEFB $2F
+042C 20          DEFB $20
+
+; - - - - - - - -
+
+; this table is used to remap certain keycodes
+; (helps reduce keycode to allophone table size)
+; e.g. CLS is spoken as per CLEAR
+
+D042D: ; see L11D, remap these to next table
+042D 29          DEFB $29 ; ')'
+042E 5B          DEFB $5B ; '['
+042F 5D          DEFB $5D ; ']'
+0430 7B          DEFB $7B ; '{'
+0431 7D          DEFB $7D ; '}'
+0432 A9          DEFB $A9 ; 'POINT'
+0433 FB          DEFB $FB ; 'CLS'
+0434 40          DEFB $40 ; '@'
+0435 09          DEFB $09 ; rt
+0436 0A          DEFB $0A ; dn
+0437 0B          DEFB $0B ; up
+0438 BC          DEFB $BC ; 'SGN'
+0439 C6          DEFB $C6 ; 'AND'
+;
+043A 28          DEFB $28 ; ')' to '('
+043B 28          DEFB $28 ; '[' to '('
+043C 28          DEFB $28 ; ']' to '('
+043D 28          DEFB $28 ; '{' to '('
+043E 28          DEFB $28 ; '}' to '('
+043F 2E          DEFB $2E ; 'POINT' to '.'
+0440 FD          DEFB $FD ; 'CLS' to 'CLEAR'
+0441 AC          DEFB $AC ; '@' to 'AT'
+0442 08          DEFB $08 ; rt to lt
+0443 08          DEFB $08 ; dn to lt
+0444 08          DEFB $08 ; up to lt
+0445 B2          DEFB $B2 ; 'SGN' to 'SIN'
+0446 26          DEFB $26 ; 'AND' to '&'
+
+; - - - - - - - - - -
+
+; this huge table translates key codes to lists of allophone
+
+D0447: ; see L012C, key code to allophones translation table
+0447 80          DEFB $80
+0448 07          DEFB $07 ; 'EDIT'
+0449 47          DEFB $47 ; + e
+044A 15          DEFB $15 ; d
+044B 0C          DEFB $0C ; i
+044C 8D          DEFB $8D ; (tt)
+044D 0D          DEFB $0D ; 'ENTER'
+044E 47          DEFB $47 ; + e
+044F 07          DEFB $07 ; e
+0450 0B          DEFB $0B ; n
+0451 00          DEFB $00 ; -pa1-
+0452 0D          DEFB $0D ; (tt)
+0453 9A          DEFB $9A ; (eh)
+0454 08          DEFB $08 ; 'CURSOR'
+0455 08          DEFB $08
+0456 00          DEFB $00
+0457 33          DEFB $33
+0458 00          DEFB $00
+0459 37          DEFB $37
+045A 37          DEFB $37
+045B B3          DEFB $B3
+045C 0C          DEFB $0C ; 'DELETE'
+045D 21          DEFB $21
+045E 4C          DEFB $4C
+045F 2D          DEFB $2D
+0460 13          DEFB $13
+0461 91          DEFB $91
+0462 D9          DEFB $D9 ; 'INK'
+0463 0C          DEFB $0C
+0464 2C          DEFB $2C
+0465 AA          DEFB $AA
+0466 DA          DEFB $DA ; PAPER'
+0467 09          DEFB $09
+0468 00          DEFB $00
+0469 54          DEFB $54
+046A 09          DEFB $09
+046B B3          DEFB $B3
+046C 80          DEFB $80 ; 'GRAPHIC'
+046D 3D          DEFB $3D
+046E 27          DEFB $27
+046F 58          DEFB $58
+0470 28          DEFB $28
+0471 0C          DEFB $0C
+0472 A9          DEFB $A9
+0473 DB          DEFB $DB ; 'FLASH'
+0474 28          DEFB $28
+0475 2D          DEFB $2D
+0476 58          DEFB $58
+0477 A5          DEFB $A5
+0478 DC          DEFB $DC ; 'BRIGHT'
+0479 1C          DEFB $1C
+047A 27          DEFB $27
+047B 00          DEFB $00
+047C 06          DEFB $06
+047D 8D          DEFB $8D
+047E DD          DEFB $DD ; 'INVERSE'
+047F 4C          DEFB $4C
+0480 0C          DEFB $0C
+0481 0B          DEFB $0B
+0482 23          DEFB $23
+0483 34          DEFB $34
+0484 B7          DEFB $B7
+0485 DE          DEFB $DE ; 'OVER'
+0486 75          DEFB $75
+0487 23          DEFB $23
+0488 B3          DEFB $B3
+0489 AC          DEFB $AC ; 'AT'
+048A 18          DEFB $18
+048B 8D          DEFB $8D
+048C AD          DEFB $AD ; 'TAB'
+048D 0D          DEFB $0D
+048E 18          DEFB $18
+048F 18          DEFB $18
+0490 9C          DEFB $9C
+0491 21          DEFB $21 ; '!'
+0492 47          DEFB $47
+0493 0A          DEFB $0A
+0494 37          DEFB $37
+0495 08          DEFB $08
+0496 2D          DEFB $2D
+0497 1A          DEFB $1A
+0498 10          DEFB $10
+0499 54          DEFB $54
+049A 25          DEFB $25
+049B 0F          DEFB $0F
+049C 8B          DEFB $8B
+049D 22          DEFB $22 ; '"'
+049E 2A          DEFB $2A
+049F 2E          DEFB $2E
+04A0 35          DEFB $35
+04A1 91          DEFB $91
+04A2 26          DEFB $26 ; '&'
+04A3 58          DEFB $58
+04A4 2C          DEFB $2C
+04A5 95          DEFB $95
+04A6 27          DEFB $27 ; ','
+04A7 18          DEFB $18
+04A8 09          DEFB $09
+04A9 57          DEFB $57
+04AA 37          DEFB $37
+04AB 11          DEFB $11
+04AC 27          DEFB $27
+04AD 0F          DEFB $0F
+04AE 28          DEFB $28
+04AF 93          DEFB $93
+04B0 28          DEFB $28 ; '('
+04B1 3F          DEFB $3F
+04B2 27          DEFB $27
+04B3 58          DEFB $58
+04B4 2A          DEFB $2A
+04B5 07          DEFB $07
+04B6 8D          DEFB $8D
+04B7 3C          DEFB $3C ; '<'
+04B8 2D          DEFB $2D
+04B9 47          DEFB $47
+04BA 37          DEFB $37
+04BB 37          DEFB $37
+04BC 01          DEFB $01
+04BD 1D          DEFB $1D
+04BE 1A          DEFB $1A
+04BF 8B          DEFB $8B
+04C0 3E          DEFB $3E ; '>'
+04C1 3D          DEFB $3D
+04C2 27          DEFB $27
+04C3 54          DEFB $54
+04C4 0D          DEFB $0D
+04C5 B4          DEFB $B4
+04C6 C8          DEFB $C8 ; '>='
+04C7 3D          DEFB $3D
+04C8 27          DEFB $27
+04C9 54          DEFB $54
+04CA 0D          DEFB $0D
+04CB 34          DEFB $34
+04CC 01          DEFB $01
+04CD 3A          DEFB $3A
+04CE 01          DEFB $01
+04CF 53          DEFB $53
+04D0 29          DEFB $29
+04D1 2E          DEFB $2E
+04D2 0F          DEFB $0F
+04D3 AD          DEFB $AD
+04D4 C7          DEFB $C7 ; '<='
+04D5 2D          DEFB $2D
+04D6 47          DEFB $47
+04D7 37          DEFB $37
+04D8 37          DEFB $37
+04D9 01          DEFB $01
+04DA 12          DEFB $12
+04DB 18          DEFB $18
+04DC 0B          DEFB $0B
+04DD 01          DEFB $01
+04DE 3A          DEFB $3A
+04DF 01          DEFB $01
+04E0 53          DEFB $53
+04E1 29          DEFB $29
+04E2 2E          DEFB $2E
+04E3 0F          DEFB $0F
+04E4 AD          DEFB $AD
+04E5 C9          DEFB $C9 ; '<>'
+04E6 0B          DEFB $0B
+04E7 57          DEFB $57
+04E8 0D          DEFB $0D
+04E9 01          DEFB $01
+04EA 53          DEFB $53
+04EB 29          DEFB $29
+04EC 2E          DEFB $2E
+04ED 0F          DEFB $0F
+04EE AD          DEFB $AD
+04EF 2F          DEFB $2F ; '/'
+04F0 37          DEFB $37
+04F1 37          DEFB $37
+04F2 2D          DEFB $2D
+04F3 18          DEFB $18
+04F4 A5          DEFB $A5
+04F5 5C          DEFB $5C ; '\\'
+04F6 3F          DEFB $3F
+04F7 58          DEFB $58
+04F8 29          DEFB $29
+04F9 01          DEFB $01
+04FA 37          DEFB $37
+04FB 2D          DEFB $2D
+04FC 18          DEFB $18
+04FD A5          DEFB $A5
+04FE 2E          DEFB $2E ; '.'
+04FF 09          DEFB $09
+0500 05          DEFB $05
+0501 0B          DEFB $0B
+0502 8D          DEFB $8D
+0503 2C          DEFB $2C ; ','
+0504 08          DEFB $08
+0505 17          DEFB $17
+0506 10          DEFB $10
+0507 98          DEFB $98
+0508 3B          DEFB $3B ; ';'
+0509 37          DEFB $37
+050A 47          DEFB $47
+050B 10          DEFB $10
+050C 13          DEFB $13
+050D 08          DEFB $08
+050E 35          DEFB $35
+050F 2D          DEFB $2D
+0510 17          DEFB $17
+0511 8B          DEFB $8B
+0512 5F          DEFB $5F ; '_'
+0513 4F          DEFB $4F
+0514 0B          DEFB $0B
+0515 15          DEFB $15
+0516 33          DEFB $33
+0517 2D          DEFB $2D
+0518 06          DEFB $06
+0519 8B          DEFB $8B
+051A 2A          DEFB $2A ; '*'
+051B 37          DEFB $37
+051C 0D          DEFB $0D
+051D BB          DEFB $BB
+051E 60          DEFB $60 ; ukp ?
+051F 09          DEFB $09
+0520 20          DEFB $20
+0521 0B          DEFB $0B
+0522 A1          DEFB $A1
+0523 2B          DEFB $2B ; '+'
+0524 09          DEFB $09
+0525 2D          DEFB $2D
+0526 0F          DEFB $0F
+0527 37          DEFB $37
+0528 B7          DEFB $B7
+0529 2D          DEFB $2D ; '-'
+052A 10          DEFB $10
+052B 46          DEFB $46
+052C 38          DEFB $38
+052D 0F          DEFB $0F
+052E 37          DEFB $37
+052F B7          DEFB $B7
+0530 20          DEFB $20 ; 'space'
+0531 37          DEFB $37
+0532 09          DEFB $09
+0533 14          DEFB $14
+0534 37          DEFB $37
+0535 B7          DEFB $B7
+0536 5E          DEFB $5E ; '^'
+0537 09          DEFB $09
+0538 60          DEFB $60
+0539 2E          DEFB $2E
+053A B3          DEFB $B3
+053B 3F          DEFB $3F ; '?'
+053C 2A          DEFB $2A
+053D 2E          DEFB $2E
+053E 13          DEFB $13
+053F 27          DEFB $27
+0540 93          DEFB $93
+0541 7C          DEFB $7C ; '|'
+0542 1C          DEFB $1C
+0543 BB          DEFB $BB
+0544 7F          DEFB $7F ; '(c)'
+0545 08          DEFB $08
+0546 57          DEFB $57
+0547 09          DEFB $09
+0548 13          DEFB $13
+0549 27          DEFB $27
+054A 06          DEFB $06
+054B 8D          DEFB $8D
+054C F1          DEFB $F1 ; 'LET'
+054D 2D          DEFB $2D
+054E 07          DEFB $07
+054F 8D          DEFB $8D
+0550 3A          DEFB $3A ; ':'
+0551 08          DEFB $08
+0552 75          DEFB $75
+0553 2D          DEFB $2D
+0554 17          DEFB $17
+0555 8B          DEFB $8B
+0556 3D          DEFB $3D ; '='
+0557 53          DEFB $53
+0558 29          DEFB $29
+0559 2E          DEFB $2E
+055A 0F          DEFB $0F
+055B 2D          DEFB $2D
+055C AB          DEFB $AB
+055D E6          DEFB $E6 ; 'NEW'
+055E 0B          DEFB $0B
+055F 31          DEFB $31
+0560 9F          DEFB $9F
+0561 30          DEFB $30 ; '0'
+0562 38          DEFB $38
+0563 3A          DEFB $3A
+0564 8D          DEFB $8D
+0565 31          DEFB $31 ; '1'
+0566 2E          DEFB $2E
+0567 57          DEFB $57
+0568 8B          DEFB $8B
+0569 32          DEFB $32 ; '2'
+056A 0D          DEFB $0D
+056B 9F          DEFB $9F
+056C 33          DEFB $33 ; '3'
+056D 1D          DEFB $1D
+056E 33          DEFB $33
+056F 93          DEFB $93
+0570 34          DEFB $34 ; '4'
+0571 28          DEFB $28
+0572 BA          DEFB $BA
+0573 35          DEFB $35 ; '5'
+0574 28          DEFB $28
+0575 06          DEFB $06
+0576 A3          DEFB $A3
+0577 36          DEFB $36 ; '6'
+0578 37          DEFB $37
+0579 4C          DEFB $4C
+057A 2A          DEFB $2A
+057B B7          DEFB $B7
+057C 37          DEFB $37 ; '7'
+057D 37          DEFB $37
+057E 37          DEFB $37
+057F 47          DEFB $47
+0580 23          DEFB $23
+0581 8B          DEFB $8B
+0582 38          DEFB $38 ; '8'
+0583 14          DEFB $14
+0584 8D          DEFB $8D
+0585 39          DEFB $39 ; '9'
+0586 0B          DEFB $0B
+0587 00          DEFB $00
+0588 06          DEFB $06
+0589 8B          DEFB $8B
+058A 23          DEFB $23 ; '#'
+058B 1B          DEFB $1B
+058C 5A          DEFB $5A
+058D A5          DEFB $A5
+058E 24          DEFB $24 ; '$'
+058F 21          DEFB $21
+0590 17          DEFB $17
+0591 2D          DEFB $2D
+0592 B3          DEFB $B3
+0593 25          DEFB $25 ; '%'
+0594 09          DEFB $09
+0595 33          DEFB $33
+0596 37          DEFB $37
+0597 37          DEFB $37
+0598 47          DEFB $47
+0599 0B          DEFB $0B
+059A 8D          DEFB $8D
+059B 41          DEFB $41 ; 'A'
+059C 94          DEFB $94
+059D 42          DEFB $42 ; 'B'
+059E 3F          DEFB $3F
+059F 93          DEFB $93
+05A0 43          DEFB $43 ; 'C'
+05A1 37          DEFB $37
+05A2 37          DEFB $37
+05A3 93          DEFB $93
+05A4 44          DEFB $44 ; 'D'
+05A5 21          DEFB $21
+05A6 93          DEFB $93
+05A7 45          DEFB $45 ; 'E'
+05A8 93          DEFB $93
+05A9 46          DEFB $46 ; 'F'
+05AA 07          DEFB $07
+05AB 28          DEFB $28
+05AC A8          DEFB $A8
+05AD 47          DEFB $47 ; 'G'
+05AE 0A          DEFB $0A
+05AF 93          DEFB $93
+05B0 48          DEFB $48 ; 'H'
+05B1 14          DEFB $14
+05B2 B2          DEFB $B2
+05B3 49          DEFB $49 ; 'I'
+05B4 86          DEFB $86
+05B5 4A          DEFB $4A ; 'J'
+05B6 0A          DEFB $0A
+05B7 94          DEFB $94
+05B8 4B          DEFB $4B ; 'K'
+05B9 2A          DEFB $2A
+05BA 94          DEFB $94
+05BB 4C          DEFB $4C ; 'L'
+05BC 07          DEFB $07
+05BD BE          DEFB $BE
+05BE 4D          DEFB $4D ; 'M'
+05BF 07          DEFB $07
+05C0 90          DEFB $90
+05C1 4E          DEFB $4E ; 'N'
+05C2 07          DEFB $07
+05C3 AC          DEFB $AC
+05C4 4F          DEFB $4F ; 'O'
+05C5 B5          DEFB $B5
+05C6 50          DEFB $50 ; 'P'
+05C7 09          DEFB $09
+05C8 93          DEFB $93
+05C9 51          DEFB $51 ; 'Q'
+05CA 2A          DEFB $2A
+05CB 19          DEFB $19
+05CC 9F          DEFB $9F
+05CD 52          DEFB $52 ; 'R'
+05CE BB          DEFB $BB
+05CF 53          DEFB $53 ; 'S'
+05D0 07          DEFB $07
+05D1 37          DEFB $37
+05D2 B7          DEFB $B7
+05D3 54          DEFB $54 ; 'T'
+05D4 0D          DEFB $0D
+05D5 93          DEFB $93
+05D6 55          DEFB $55 ; 'U'
+05D7 31          DEFB $31
+05D8 9F          DEFB $9F
+05D9 56          DEFB $56 ; 'V'
+05DA 28          DEFB $28
+05DB 93          DEFB $93
+05DC 57          DEFB $57 ; 'W'
+05DD 21          DEFB $21
+05DE 4F          DEFB $4F
+05DF 3F          DEFB $3F
+05E0 3E          DEFB $3E
+05E1 31          DEFB $31
+05E2 9F          DEFB $9F
+05E3 58          DEFB $58 ; 'X'
+05E4 47          DEFB $47
+05E5 2A          DEFB $2A
+05E6 B7          DEFB $B7
+05E7 59          DEFB $59 ; 'Y'
+05E8 2E          DEFB $2E
+05E9 86          DEFB $86
+05EA 5A          DEFB $5A ; 'Z'
+05EB 2B          DEFB $2B
+05EC 07          DEFB $07
+05ED 07          DEFB $07
+05EE 95          DEFB $95
+05EF A5          DEFB $A5 ; 'RND'
+05F0 27          DEFB $27
+05F1 18          DEFB $18
+05F2 0B          DEFB $0B
+05F3 95          DEFB $95
+05F4 A6          DEFB $A6 ; 'INKEY$'
+05F5 4C          DEFB $4C
+05F6 0B          DEFB $0B
+05F7 01          DEFB $01
+05F8 2A          DEFB $2A
+05F9 93          DEFB $93
+05FA A7          DEFB $A7 ; 'PI'
+05FB 09          DEFB $09
+05FC 86          DEFB $86
+05FD A8          DEFB $A8 ; 'FN'
+05FE 28          DEFB $28
+05FF 4F          DEFB $4F
+0600 2C          DEFB $2C
+0601 08          DEFB $08
+0602 25          DEFB $25
+0603 0F          DEFB $0F
+0604 8B          DEFB $8B
+0605 AA          DEFB $AA ; 'SCREEN$'
+0606 37          DEFB $37
+0607 08          DEFB $08
+0608 27          DEFB $27
+0609 13          DEFB $13
+060A 8B          DEFB $8B
+060B AB          DEFB $AB ; 'ATTR'
+060C 58          DEFB $58
+060D 0D          DEFB $0D
+060E A7          DEFB $A7
+060F AE          DEFB $AE ; 'VAL$'
+0610 23          DEFB $23
+0611 58          DEFB $58
+0612 2D          DEFB $2D
+0613 B7          DEFB $B7
+0614 AF          DEFB $AF ; 'CODE'
+0615 08          DEFB $08
+0616 35          DEFB $35
+0617 95          DEFB $95
+0618 B0          DEFB $B0 ; 'VAL'
+0619 23          DEFB $23
+061A 58          DEFB $58
+061B AD          DEFB $AD
+061C B1          DEFB $B1 ; 'LEN'
+061D 2D          DEFB $2D
+061E 47          DEFB $47
+061F 8B          DEFB $8B
+0620 B2          DEFB $B2 ; 'SIN'
+0621 37          DEFB $37
+0622 06          DEFB $06
+0623 8B          DEFB $8B
+0624 B3          DEFB $B3 ; 'COS'
+0625 08          DEFB $08
+0626 17          DEFB $17
+0627 AB          DEFB $AB
+0628 B4          DEFB $B4 ; 'TAN'
+0629 0D          DEFB $0D
+062A 18          DEFB $18
+062B 8B          DEFB $8B
+062C B5          DEFB $B5 ; 'ASN'
+062D 3B          DEFB $3B
+062E 08          DEFB $08
+062F 37          DEFB $37
+0630 06          DEFB $06
+0631 8B          DEFB $8B
+0632 B6          DEFB $B6 ; 'ACS'
+0633 3B          DEFB $3B
+0634 08          DEFB $08
+0635 01          DEFB $01
+0636 08          DEFB $08
+0637 17          DEFB $17
+0638 AB          DEFB $AB
+0639 B7          DEFB $B7 ; 'ATN'
+063A 3B          DEFB $3B
+063B 08          DEFB $08
+063C 0D          DEFB $0D
+063D 18          DEFB $18
+063E 8B          DEFB $8B
+063F B8          DEFB $B8 ; 'LN'
+0640 2D          DEFB $2D
+0641 17          DEFB $17
+0642 17          DEFB $17
+0643 A2          DEFB $A2
+0644 B9          DEFB $B9 ; 'EXP'
+0645 47          DEFB $47
+0646 2A          DEFB $2A
+0647 37          DEFB $37
+0648 89          DEFB $89
+0649 BA          DEFB $BA ; 'INT'
+064A 0C          DEFB $0C
+064B 0B          DEFB $0B
+064C 91          DEFB $91
+064D BB          DEFB $BB ; 'SQR'
+064E 27          DEFB $27
+064F 1F          DEFB $1F
+0650 8D          DEFB $8D
+0651 BD          DEFB $BD ; 'ABS'
+0652 58          DEFB $58
+0653 1C          DEFB $1C
+0654 B7          DEFB $B7
+0655 BE          DEFB $BE ; 'PEEK'
+0656 09          DEFB $09
+0657 13          DEFB $13
+0658 A9          DEFB $A9
+0659 BF          DEFB $BF ; 'IN'
+065A 4C          DEFB $4C
+065B 8B          DEFB $8B
+065C C0          DEFB $C0 ; 'USR'
+065D 31          DEFB $31
+065E 16          DEFB $16
+065F 2B          DEFB $2B
+0660 B3          DEFB $B3
+0661 C1          DEFB $C1 ; 'STR$'
+0662 37          DEFB $37
+0663 11          DEFB $11
+0664 27          DEFB $27
+0665 0C          DEFB $0C
+0666 AC          DEFB $AC
+0667 C2          DEFB $C2 ; 'CHR$'
+0668 32          DEFB $32
+0669 7B          DEFB $7B
+066A AB          DEFB $AB
+066B C3          DEFB $C3 ; 'NOT'
+066C 0B          DEFB $0B
+066D 17          DEFB $17
+066E 8D          DEFB $8D
+066F C4          DEFB $C4 ; 'BIN'
+0670 1C          DEFB $1C
+0671 0C          DEFB $0C
+0672 8B          DEFB $8B
+0673 C5          DEFB $C5 ; 'OR'
+0674 BA          DEFB $BA
+0675 CA          DEFB $CA ; 'LINE'
+0676 2D          DEFB $2D
+0677 06          DEFB $06
+0678 8B          DEFB $8B
+0679 CB          DEFB $CB ; 'THEN'
+067A 12          DEFB $12
+067B 47          DEFB $47
+067C 8B          DEFB $8B
+067D CC          DEFB $CC ; 'TO'
+067E 0D          DEFB $0D
+067F 9F          DEFB $9F
+0680 CD          DEFB $CD ; 'STEP'
+0681 37          DEFB $37
+0682 11          DEFB $11
+0683 47          DEFB $47
+0684 89          DEFB $89
+0685 CE          DEFB $CE ; 'DEF FN'
+0686 15          DEFB $15
+0687 47          DEFB $47
+0688 28          DEFB $28
+0689 06          DEFB $06
+068A 8B          DEFB $8B
+068B CF          DEFB $CF ; 'CAT'
+068C 08          DEFB $08
+068D 58          DEFB $58
+068E 91          DEFB $91
+068F D0          DEFB $D0 ; 'FORMAT'
+0690 28          DEFB $28
+0691 7A          DEFB $7A
+0692 10          DEFB $10
+0693 18          DEFB $18
+0694 91          DEFB $91
+0695 D1          DEFB $D1 ; 'MOVE'
+0696 10          DEFB $10
+0697 1F          DEFB $1F
+0698 A3          DEFB $A3
+0699 D2          DEFB $D2 ; 'ERASE'
+069A 73          DEFB $73
+069B 14          DEFB $14
+069C B7          DEFB $B7
+069D D3          DEFB $D3 ; 'OPEN #'
+069E 75          DEFB $75
+069F 09          DEFB $09
+06A0 0F          DEFB $0F
+06A1 8B          DEFB $8B
+06A2 D4          DEFB $D4 ; 'CLOSE #'
+06A3 08          DEFB $08
+06A4 2D          DEFB $2D
+06A5 35          DEFB $35
+06A6 B7          DEFB $B7
+06A7 D5          DEFB $D5 ; 'MERGE'
+06A8 10          DEFB $10
+06A9 74          DEFB $74
+06AA 15          DEFB $15
+06AB 8A          DEFB $8A
+06AC D6          DEFB $D6 ; 'VERIFY'
+06AD 23          DEFB $23
+06AE 47          DEFB $47
+06AF 27          DEFB $27
+06B0 0C          DEFB $0C
+06B1 28          DEFB $28
+06B2 86          DEFB $86
+06B3 D7          DEFB $D7 ; 'BEEP'
+06B4 3F          DEFB $3F
+06B5 13          DEFB $13
+06B6 89          DEFB $89
+06B7 D8          DEFB $D8 ; 'CIRCLE'
+06B8 37          DEFB $37
+06B9 33          DEFB $33
+06BA 08          DEFB $08
+06BB 0F          DEFB $0F
+06BC AD          DEFB $AD
+06BD DF          DEFB $DF ; 'OUT'
+06BE 20          DEFB $20
+06BF 91          DEFB $91
+06C0 E0          DEFB $E0 ; 'LPRINT'
+06C1 47          DEFB $47
+06C2 3E          DEFB $3E
+06C3 01          DEFB $01
+06C4 09          DEFB $09
+06C5 27          DEFB $27
+06C6 0C          DEFB $0C
+06C7 0B          DEFB $0B
+06C8 91          DEFB $91
+06C9 E1          DEFB $E1 ; 'LLIST'
+06CA 47          DEFB $47
+06CB 3E          DEFB $3E
+06CC 01          DEFB $01
+06CD 2D          DEFB $2D
+06CE 0C          DEFB $0C
+06CF 37          DEFB $37
+06D0 91          DEFB $91
+06D1 E2          DEFB $E2 ; 'STOP'
+06D2 37          DEFB $37
+06D3 11          DEFB $11
+06D4 17          DEFB $17
+06D5 89          DEFB $89
+06D6 E3          DEFB $E3 ; 'READ'
+06D7 27          DEFB $27
+06D8 13          DEFB $13
+06D9 95          DEFB $95
+06DA E4          DEFB $E4 ; 'DATA'
+06DB 21          DEFB $21
+06DC 54          DEFB $54
+06DD 11          DEFB $11
+06DE 8F          DEFB $8F
+06DF E5          DEFB $E5 ; 'RESTORE'
+06E0 27          DEFB $27
+06E1 4C          DEFB $4C
+06E2 37          DEFB $37
+06E3 11          DEFB $11
+06E4 BA          DEFB $BA
+06E5 E7          DEFB $E7 ; 'BORDER'
+06E6 3F          DEFB $3F
+06E7 3A          DEFB $3A
+06E8 21          DEFB $21
+06E9 B3          DEFB $B3
+06EA E8          DEFB $E8 ; 'CONTINUE'
+06EB 08          DEFB $08
+06EC 17          DEFB $17
+06ED 0B          DEFB $0B
+06EE 11          DEFB $11
+06EF 4C          DEFB $4C
+06F0 0B          DEFB $0B
+06F1 31          DEFB $31
+06F2 9F          DEFB $9F
+06F3 E9          DEFB $E9 ; 'DIM'
+06F4 21          DEFB $21
+06F5 4C          DEFB $4C
+06F6 90          DEFB $90
+06F7 EA          DEFB $EA ; 'REM'
+06F8 27          DEFB $27
+06F9 07          DEFB $07
+06FA 90          DEFB $90
+06FB EB          DEFB $EB ; 'FOR'
+06FC 28          DEFB $28
+06FD BA          DEFB $BA
+06FE EC          DEFB $EC ; 'GO TO'
+06FF 3D          DEFB $3D
+0700 75          DEFB $75
+0701 01          DEFB $01
+0702 0D          DEFB $0D
+0703 96          DEFB $96
+0704 ED          DEFB $ED ; 'GO SUB'
+0705 3D          DEFB $3D
+0706 75          DEFB $75
+0707 01          DEFB $01
+0708 37          DEFB $37
+0709 0F          DEFB $0F
+070A 9C          DEFB $9C
+070B EE          DEFB $EE ; 'INPUT'
+070C 4C          DEFB $4C
+070D 0B          DEFB $0B
+070E 09          DEFB $09
+070F 1E          DEFB $1E
+0710 91          DEFB $91
+0711 EF          DEFB $EF ; 'LOAD'
+0712 2D          DEFB $2D
+0713 35          DEFB $35
+0714 95          DEFB $95
+0715 F0          DEFB $F0 ; 'LIST'
+0716 2D          DEFB $2D
+0717 4C          DEFB $4C
+0718 37          DEFB $37
+0719 91          DEFB $91
+071A F2          DEFB $F2 ; 'PAUSE'
+071B 09          DEFB $09
+071C 3A          DEFB $3A
+071D AB          DEFB $AB
+071E F3          DEFB $F3 ; 'NEXT'
+071F 0B          DEFB $0B
+0720 47          DEFB $47
+0721 2A          DEFB $2A
+0722 37          DEFB $37
+0723 91          DEFB $91
+0724 F4          DEFB $F4 ; 'POKE'
+0725 09          DEFB $09
+0726 35          DEFB $35
+0727 A9          DEFB $A9
+0728 F5          DEFB $F5 ; 'PRINT'
+0729 09          DEFB $09
+072A 27          DEFB $27
+072B 4C          DEFB $4C
+072C 0B          DEFB $0B
+072D 91          DEFB $91
+072E F6          DEFB $F6 ; 'PLOT'
+072F 09          DEFB $09
+0730 2D          DEFB $2D
+0731 17          DEFB $17
+0732 91          DEFB $91
+0733 F7          DEFB $F7 ; 'RUN'
+0734 27          DEFB $27
+0735 0F          DEFB $0F
+0736 8B          DEFB $8B
+0737 F8          DEFB $F8 ; 'SAVE'
+0738 37          DEFB $37
+0739 14          DEFB $14
+073A A3          DEFB $A3
+073B F9          DEFB $F9 ; 'RANDOMIZE'
+073C 27          DEFB $27
+073D 58          DEFB $58
+073E 0B          DEFB $0B
+073F 15          DEFB $15
+0740 0F          DEFB $0F
+0741 10          DEFB $10
+0742 06          DEFB $06
+0743 AB          DEFB $AB
+0744 FA          DEFB $FA ; 'IF'
+0745 4C          DEFB $4C
+0746 A8          DEFB $A8
+0747 FC          DEFB $FC ; 'DRAW'
+0748 15          DEFB $15
+0749 27          DEFB $27
+074A BA          DEFB $BA
+074B FD          DEFB $FD ; 'CLEAR'
+074C 08          DEFB $08
+074D 2D          DEFB $2D
+074E AF          DEFB $AF
+074F FE          DEFB $FE ; 'RETURN'
+0750 27          DEFB $27
+0751 4C          DEFB $4C
+0752 11          DEFB $11
+0753 34          DEFB $34
+0754 8B          DEFB $8B
+0755 FF          DEFB $FF ; 'COPY'
+0756 08          DEFB $08
+0757 17          DEFB $17
+0758 09          DEFB $09
+0759 93          DEFB $93
+075A 00          DEFB $00 ; end of list
+
+; - - - - - - - - - -
+
+; this table defines the copyright message using addresses of characters
+
+D075B: ; location of copyright characters
+075B A0 07       DEFW $07A0 ; S
+075D A8 07       DEFW $07A8 ; p
+075F B0 07       DEFW $07B0 ; e
+0761 B0 07       DEFW $07B0 ; e
+0763 B8 07       DEFW $07B8 ; c
+0765 C0 07       DEFW $07C0 ; h
+0767 98 07       DEFW $0798 ; space
+0769 A0 07       DEFW $07A0 ; S
+076B C8 07       DEFW $07C8 ; y
+076D E0 07       DEFW $07E0 ; s
+076F D8 07       DEFW $07D8 ; t
+0771 B0 07       DEFW $07B0 ; e
+0773 D0 07       DEFW $07D0 ; m
+0775 98 07       DEFW $0798 ; space
+0777 E8 07       DEFW $07E8 ; (c)
+0779 98 07       DEFW $0798 ; space
+077B F0 07       DEFW $07F0 ; C inverse
+077D F8 07       DEFW $07F8 ; U inverse
+077F 08 00       DEFW $0008 ; R inverse
+0781 08 00       DEFW $0008 ; R inverse
+0783 10 00       DEFW $0010 ; A inverse
+0785 18 00       DEFW $0018 ; H inverse
+0787 98 07       DEFW $0798 ; space
+0789 20 00       DEFW $0020 ; 1
+078B 28 00       DEFW $0028 ; 9
+078D 30 00       DEFW $0030 ; 8
+078F 00 00       DEFW $0000 ; 3
+0791 FF FF       DEFW $FFFF ; end mark
+
+; - - - - - - - - - -
+
+; unused bytes - author?
+
+0793 41          DEFB $41 'A'
+0794 6E          DEFB $6E 'n'
+0795 73          DEFB $73 's'
+0796 6F          DEFB $6F 'o'
+0797 6E          DEFB $6E 'n'
+
+; - - - - - - - - - -
+
+; more character defs for copyright
+
+0798 00          DEFB $00 ; ........
+0799 00          DEFB $00 ; ........
+079A 00          DEFB $00 ; ........
+079B 00          DEFB $00 ; ........
+079C 00          DEFB $00 ; ........
+079D 00          DEFB $00 ; ........
+079E 00          DEFB $00 ; ........
+079F 00          DEFB $00 ; ........
+
+07A0 00          DEFB $00 ; ........
+07A1 3C          DEFB $3C ; ..xxxx..
+07A2 40          DEFB $40 ; .x......
+07A3 3C          DEFB $3C ; ..xxxx..
+07A4 02          DEFB $02 ; ......x.
+07A5 42          DEFB $42 ; .x....x.
+07A6 3C          DEFB $3C ; ..xxxx..
+07A7 00          DEFB $00 ; ........
+
+07A8 00          DEFB $00 ; ........
+07A9 00          DEFB $00 ; ........
+07AA 78          DEFB $78 ; .xxxx...
+07AB 44          DEFB $44 ; .x...x..
+07AC 44          DEFB $44 ; .x...x..
+07AD 78          DEFB $78 ; .xxxx...
+07AE 40          DEFB $40 ; .x......
+07AF 40          DEFB $40 ; .x......
+
+07B0 00          DEFB $00 ; ........
+07B1 00          DEFB $00 ; ........
+07B2 38          DEFB $38 ; ..xxx...
+07B3 44          DEFB $44 ; .x...x..
+07B4 78          DEFB $78 ; .xxxx...
+07B5 40          DEFB $40 ; .x......
+07B6 3C          DEFB $3C ; ..xxx...
+07B7 00          DEFB $00 ; ........
+
+07B8 00          DEFB $00 ; ........
+07B9 00          DEFB $00 ; ........
+07BA 38          DEFB $38 ; ..xxx...
+07BB 40          DEFB $40 ; .x......
+07BC 40          DEFB $40 ; .x......
+07BD 40          DEFB $40 ; .x......
+07BE 38          DEFB $38 ; ..xxx...
+07BF 00          DEFB $00 ; ........
+
+07C0 00          DEFB $00 ; ........
+07C1 40          DEFB $40 ; .x......
+07C2 40          DEFB $40 ; .x......
+07C3 78          DEFB $78 ; .xxxx...
+07C4 44          DEFB $44 ; .x...x..
+07C5 44          DEFB $44 ; .x...x..
+07C6 44          DEFB $44 ; .x...x..
+07C7 00          DEFB $00 ; ........
+
+07C8 00          DEFB $00 ; ........
+07C9 00          DEFB $00 ; ........
+07CA 44          DEFB $44 ; .x...x..
+07CB 44          DEFB $44 ; .x...x..
+07CC 44          DEFB $44 ; .x...x..
+07CD 3C          DEFB $3C ; ..xxxx..
+07CE 04          DEFB $04 ; .....x..
+07CF 38          DEFB $38 ; .xxxx...
+
+07D0 00          DEFB $00 ; ........
+07D1 00          DEFB $00 ; ........
+07D2 68          DEFB $68 ; .xx.x...
+07D3 54          DEFB $54 ; .x.x.x..
+07D4 54          DEFB $54 ; .x.x.x..
+07D5 54          DEFB $54 ; .x.x.x..
+07D6 54          DEFB $54 ; .x.x.x..
+07D7 00          DEFB $00 ; ........
+
+07D8 00          DEFB $00 ; ........
+07D9 20          DEFB $20 ; ..x.....
+07DA 70          DEFB $70 ; .xxx....
+07DB 20          DEFB $20 ; ..x.....
+07DC 20          DEFB $20 ; ..x.....
+07DD 20          DEFB $20 ; ..x.....
+07DE 18          DEFB $18 ; ...xx...
+07DF 00          DEFB $00 ; ........
+
+07E0 00          DEFB $00 ; ........
+07E1 00          DEFB $00 ; ........
+07E2 38          DEFB $38 ; ..xxx...
+07E3 40          DEFB $40 ; .x......
+07E4 38          DEFB $38 ; ..xxx...
+07E5 04          DEFB $04 ; .....x..
+07E6 78          DEFB $78 ; .xxxx...
+07E7 00          DEFB $00 ; ........
+
+07E8 3C          DEFB $3C ; ..xxxx..
+07E9 42          DEFB $42 ; .x....x.
+07EA 99          DEFB $99 ; x..xx..x
+07EB A1          DEFB $A1 ; x.x....x
+07EC A1          DEFB $A1 ; x.x....x
+07ED 99          DEFB $99 ; x..xx..x
+07EE 42          DEFB $42 ; .x....x.
+07EF 3C          DEFB $3C ; ..xxxx..
+
+07F0 FF          DEFB $FF ; xxxxxxxx
+07F1 C3          DEFB $C3 ; xx....xx
+07F2 BD          DEFB $BD ; x.xxxx.x
+07F3 BF          DEFB $BF ; x.xxxxxx
+07F4 BF          DEFB $BF ; x.xxxxxx
+07F5 BD          DEFB $BD ; x.xxxx.x
+07F6 C3          DEFB $C3 ; xx....xx
+07F7 FF          DEFB $FF ; xxxxxxxx
+
+07F8 FF          DEFB $FF ; xxxxxxxx
+07F9 BD          DEFB $BD ; x.xxxx.x
+07FA BD          DEFB $BD ; x.xxxx.x
+07FB BD          DEFB $BD ; x.xxxx.x
+07FC BD          DEFB $BD ; x.xxxx.x
+07FD BD          DEFB $BD ; x.xxxx.x
+07FE C3          DEFB $C3 ; xx....xx
+07FF FF          DEFB $FF ; xxxxxxxx
+
+; end of ROM
