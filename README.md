@@ -1,6 +1,9 @@
 # zxspectrum
 ZX Spectrum related experimentations and investigations
 
+uspeech
+* after seeing a Facebook posting I was inspired to create a disassembly of the Currah Microspeech ROM, by hand.
+
 z80tomem
 * takes a "z80" format snapshot and a ZX ROM image file and makes a 64k image of memory.
 
