@@ -1,0 +1,80 @@
+
+Minimum Spectrum Interface 1 to Amiga Serial Cable
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+View looking into socket of Interface 1 (female)
+
+
+	Amiga RxD
+            |
+____________|____________	_________________________
+\           |           /	\                       / 1=???  6=???
+ \  o   +   +   o   o  /	 \ 5o   o   o   o   o1 /  2=???  7=GND
+  \    /              /		  \                   /   3=TxD  8=???
+   \  +   o   o   o  /		   \ 9o   o   o   o6 /    4=DSR  9=+5V?
+    \_______________/		    \_______________/     5=???
+
+
+
+Known to work at 300 and 1200 baud
+
+Probably need a ground connection to get higher speeds to work
+
+WARNING: Linked pins join (I think) +5V and DSR (Data Set Ready)
+	Errm, forces Spectrum to send regardless anyway.
+
+-----------------------------------------------------------------------------
+
+"getser" can only currently cope with BASIC programs and CODE files...
+
+	FORMAT "b",300			<--- or 1200
+
+	SAVE *"b"
+
+	SAVE *"b" CODE addr,len
+
+-----------------------------------------------------------------------------
+
+From the PC "Z80 v3.02" docs (and corrected):
+
+	Spectrum                      'AT'     'PC'
+	(9 pins)                    (9 pins) (25 pins)
+
+	 3  TxD --------------- RxD    2         3
+	                        TxD    3         2
+
+	 4  DSR --------------- DTR    4        20
+	                        DSR    6         6
+
+	                   /--- RTS    7         4	! Z80.doc says these
+                           \--- CTS    8         5	! are other way round
+
+	 7  GND --------------- GND    5         7
+
+
+  1=??? 6=DSR
+  2=RxD 7=RTS
+  3=TxD 8=CTS
+  4=DTR 9=???
+  5=GND
+PC 9 PIN SERIAL
+
+-----------------------------------------------------------------------------
+
+Questions (having lost Interface 1 manual...)
+~~~~~~~~~
+	Which pin is RxD?
+		(possibly pin 2?)
+	What h/w flow control other than DSR and on which pins?
+		(possibly only CTS??)
+
+Notes
+~~~~~
+	TxD	O	Transmit Data
+	RxD	I	Receive Data
+	RTS	O	Request To Send
+	CTS	I	Clear To Send
+	DSR	I	Data Set Ready
+	DTR	O	Data Terminal Ready
+	GND		GrouND
