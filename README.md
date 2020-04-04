@@ -15,3 +15,9 @@ getser
 
 blocks2tzx
 * this is a simple hack to make a TZX usable in a modern emulator from files created by getser.
+
+mdrinfo
+* rough program to "map" Microdrive cartridge file, also showing cart name and a simple catalog
+
+mdr2bas
+* rough program to extract BASIC programs from Microdrive cartridge file, saving as ".bas" PLUS3DOS format (e.g. can load onto ZX Spectrum Next).
