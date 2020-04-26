@@ -3,6 +3,9 @@ ZX Spectrum related experimentations and investigations
 
 Most of these are VERY old - for example use K&R style syntax due to some really old Amiga C compilers used in the 90s, very bad formatting, and sometimes designed for ZX files being in a now weird split "header" and "bytes" format. This was a format that was spit out of a certain ZX Spectrum emulator on the Amiga created by Peter McGavin (think it was just called "Spectrum 1.7")
 
+imager
+* ZX Spectrum tool written using HiSoft C to perform some simple maniputation of SCREEN$ saved images - only for display, did not have ability to save.
+
 ami2zxhsc
 * Written on Amiga to convert text style C code to HiSoft C on ZX Spectrum.
 
