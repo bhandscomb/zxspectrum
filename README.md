@@ -3,6 +3,8 @@ ZX Spectrum related experimentations and investigations
 
 Most of these are VERY old - for example use K&R style syntax due to some really old Amiga C compilers used in the 90s, very bad formatting, and sometimes designed for ZX files being in a now weird split "header" and "bytes" format. This was a format that was spit out of a certain ZX Spectrum emulator on the Amiga created by Peter McGavin (think it was just called "Spectrum 1.7")
 
+More recently been starting to try out the ZX Spectrum Next.
+
 imager
 * ZX Spectrum tool written using HiSoft C to perform some simple maniputation of SCREEN$ saved images - only for display, did not have ability to save.
 
@@ -53,3 +55,10 @@ mdrinfo
 
 mdr2bas
 * Rough program to extract BASIC programs from Microdrive cartridge file, saving as ".bas" PLUS3DOS format (e.g. can load onto ZX Spectrum Next).
+
+nexhdr
+* Tool to produce simple raw-ish dump of the header of .nex files for personal investigative purposes.
+
+dot
+* First investigation into trying out ZX Spectrum Next development, a "hexdump" utility to run within NextZXOS. Work somewhat in progress.
+

@@ -143,6 +143,8 @@ int main (int argc, char *argv[])
     puts ("Missing \"Next\" signature");
     return 0;
   }
+  out_tag ("Filename");
+  puts (argv[1]);
   dumphdr ();
   return 0;
 }
