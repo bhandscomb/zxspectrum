@@ -1,2 +1,2 @@
 sjasmplus hexdump.asm
-hdfmonkey put ../cspect/tbblue-512M.mmc hexdump /dot
+hdfmonkey put ../../../specnext/cspect/tbblue-512M.mmc hexdump /dot

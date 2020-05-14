@@ -81,6 +81,7 @@ finished:
 	jp	error_handler
 
 cleanup:
+	push	af		; needed in case called from error handler
 	ld	a,(fhandle)
 	and	a
 	jr	z,notopen
@@ -88,6 +89,7 @@ cleanup:
 	ld	(fhandle),a
 	callesx	f_close
 notopen:
+	pop	af
 	ret
 
 printrow:
