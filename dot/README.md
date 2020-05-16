@@ -2,7 +2,7 @@
 
 .hexdump [-w] "file"
 
-Simple hexdump tool. Pretty much works though no way to stop it once it is going unless you are in the classic 32 column mode and you BREAK at the Scroll? prompt.
+Simple hexdump tool. Pretty much works.
 
 Code isn't too good/efficient but not going for code quality, going for something I'm going to find useful.
 

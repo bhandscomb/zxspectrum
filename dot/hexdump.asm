@@ -47,6 +47,20 @@ main_start:
 	ld	(fhandle),a
 
 loop:
+	; first let's test for break (CAPS+SPACE in old money)
+	ld	bc,keyb_CAPS_V
+	in	a,(c)
+	and	$1f
+	cp	$1e
+	jr	nz,not_break
+	ld	bc,keyb_SPACE_B
+	in	a,(c)
+	and	$1f
+	cp	$1e
+	jr	nz,not_break
+	ld	a,$c		; break error
+	jp	stderr_handler
+not_break:
 	ld	hl,byte_buffer
 	ld	bc,8
 	ld	a,(fhandle)
