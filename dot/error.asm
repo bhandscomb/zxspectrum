@@ -2,10 +2,6 @@
 
 bad_nextzxos:
 	ld	hl,msg_badnextzxos
-	jr	err_custom
-bad_nextzxosver:
-	ld	hl,msg_badnextzxosver
-err_custom:
 	xor	a
 	scf
 

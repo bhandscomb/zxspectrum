@@ -5,14 +5,11 @@ msg_help:
 	defm	"USAGE:",$0d
 	defm	" .HEXDUMP [OPT] FILE",$0d
 	defm	"OPTIONS:",$0d
-	defm	" -w, --wide",$0d
+	defm	" -w   wide mode",$0d
 	defm	$ff
 
 msg_badnextzxos:
 	defm	"Requires NextZXOS",$ff
-
-msg_badnextzxosver:
-	defm	"Requires NextZXOS ver",$ff
 
 msg_weird:
 	defm	"Weird read (>8)",$ff

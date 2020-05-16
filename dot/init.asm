@@ -31,7 +31,7 @@
 	ld	hl,$0199
 	ex	de,hl
 	sbc	hl,de
-	jr	c,bad_nextzxosver
+	jr	c,bad_nextzxos
 
 	; install error handler to reset turbo
 	ld	hl,stderr_handler
