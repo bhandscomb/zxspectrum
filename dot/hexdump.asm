@@ -130,6 +130,11 @@ pr_off_low:
 	print_char
 pr_hex:
 	ld	hl,byte_buffer
+	ld	e,l		; where to add extra space
+	inc	e
+	inc	e
+	inc	e
+	inc	e
 	ld	a,(numbytes)
 	ld	b,a
 pr_hex_loop:
@@ -141,8 +146,8 @@ pr_hex_loop:
 	jr	z,no_extra_pad
 	ld	a,' '
 	print_char
-	ld	a,b
-	cp	5
+	ld	a,l
+	cp	e
 	jr	nz,no_extra_pad
 	ld	a,' '
 	print_char
