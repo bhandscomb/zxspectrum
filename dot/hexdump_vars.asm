@@ -9,7 +9,7 @@ msg_help:
 	defm	$ff
 
 msg_badnextzxos:
-	defm	"Requires NextZXOS",$ff
+	defm	"Requires NextZXO",'S'+$80	; BASIC style error
 
 msg_weird:
 	defm	"Weird read (>8)",$ff
